@@ -23,7 +23,7 @@ import Control.Lens
 import Control.Applicative
 import Control.Monad (forever)
 import Numeric.AD
-import Numeric.LinearAlgebra ((#>), det, fromLists, fromList, toList, pinv, inv, vector, matrix, Matrix, norm_2)
+import Numeric.LinearAlgebra ((#>), det, fromLists, fromList, toList, pinv, inv, vector, matrix, Vector, Matrix, scale, norm_2)
 --import Debug.Trace
 
 
@@ -265,7 +265,7 @@ dr2ft :: (Floating f) => DH f -> FrameTrans f
 dr2ft dh theta = twistZ (dh ^. _d) theta !*!  twistX (dh^. _a) (dh^. _alpha)
 
 ur5fts :: (Floating f) => [FrameTrans f]
-ur5fts = (dr2ft <$> ur5dh)
+ur5fts = dr2ft <$> ur5dh
 
 -- calc each frame in base-coordinate for each joint-angle
 kinematics :: (Floating f) => [FrameTrans f] -> [f] -> [M44 f]
@@ -294,14 +294,32 @@ world0 = World [0.1, 0.4, 0.4, 0.1, 0.1, 0.1] [0, 0, 0, 0, 0, 0] [] cameraState0
     defaultCamera = Camera0 { phi0 = 60 , theta0 = 20 , rho0 = 7 }
     cameraState0 = makeCamera $ fromMaybe defaultCamera (optInitialCamera defaultOpts)
 
+
+
+motionPolicy :: [Double] -> [Double] ->  [Double] -> [Double]
+motionPolicy goal pos vel = toList acc
+    where
+    alpha = 0.001
+    c     = 0.01
+    beta  = 0.5
+    acc :: Vector Double
+    acc = alpha * s (vector goal - vector pos) - beta * vector vel
+    s :: Vector Double -> Vector Double
+    s v = scale (1 / h (norm_2 v)) v
+    h :: Double -> Double
+    h z = z + c * log (1 + exp (-2) * c * z)
+
 mySimulateIO :: IO ()
 mySimulateIO = vis defaultOpts 0.016 world0 simFun drawFun setCameraFun (Just kmCallback) (Just motionCallback) Nothing
   where
     delta = 0.001
 
     simFun (w,t) = return $ w  &~ do
+                        let tcpp = joint2tcp ur5fts $ w ^. jPos
                         let tcpv = w ^. tcpVel
-                        let tcpv' = zipWith (+) tcpv  [0, 0, 0, 0, 0, 0]
+                        let goal = [0.192428507378705,-0.39791168805212945,-0.43347675593345414,0.7684417340393249,-0.40013839074582813,0.3969016751654795]
+                        let tcpa = motionPolicy goal tcpp tcpv
+                        let tcpv' = zipWith (+) tcpv  tcpa
                         let j    = fromLists (jacobian (joint2tcp $ ur5fts) (w ^. jPos) :: [[Double]])
                         let jvel = if det j > 0.0001 then toList $ pinv j #> fromList tcpv else [0, 0, 0, 0, 0, 0]
                         let jpos' = zipWith (+) (w ^. jPos) jvel
@@ -322,7 +340,7 @@ mySimulateIO = vis defaultOpts 0.016 world0 simFun drawFun setCameraFun (Just km
         let info = [Text2d (show (l, j)) (0, 110  - i * 20) Fixed8By13 red | (l, i,j) <- zip3 poslabel [0..] pos]
         let infoj = [Text2d (show ("J", i, j)) (300, 110  - i * 20) Fixed8By13 red | (i,j) <- zip [0..] jpos]
         let points = Points (w ^. trajct) (Just 1.0) yellow
-        --printM44 $ last frames
+        print pos
         return (VisObjects $ vlinks ++ vframes ++ info ++ infoj ++ [points], Nothing)
 
     setCameraFun w = setCamera $ w ^. camera
